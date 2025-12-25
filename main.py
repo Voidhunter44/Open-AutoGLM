@@ -27,8 +27,14 @@ from phone_agent.agent import AgentConfig
 from phone_agent.agent_ios import IOSAgentConfig, IOSPhoneAgent
 from phone_agent.config.apps import list_supported_apps
 <<<<<<< HEAD
+<<<<<<< HEAD
 from phone_agent.config.config_ollama import OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL
 from phone_agent.config.prompts_ollama import SYSTEM_PROMPT as OLLAMA_SYSTEM_PROMPT
+=======
+from phone_agent.config.apps_harmonyos import list_supported_apps as list_harmonyos_apps
+from phone_agent.config.apps_ios import list_supported_apps as list_ios_apps
+from phone_agent.device_factory import DeviceType, get_device_factory, set_device_type
+>>>>>>> 326cadd5d3e75751468294ee2dee85b5f77a07b2
 =======
 from phone_agent.config.apps_harmonyos import list_supported_apps as list_harmonyos_apps
 from phone_agent.config.apps_ios import list_supported_apps as list_ios_apps
@@ -802,6 +808,7 @@ def main():
     base_url = args.base_url
     model_name = args.model
 
+<<<<<<< HEAD
     if args.use_ollama:
         base_url = OLLAMA_BASE_URL
         model_name = OLLAMA_DEFAULT_MODEL
@@ -813,6 +820,8 @@ def main():
         if not check_model_api(base_url, model_name, args.apikey):
             sys.exit(1)
 
+=======
+>>>>>>> 326cadd5d3e75751468294ee2dee85b5f77a07b2
     # Create configurations and agent based on device type
     model_config = ModelConfig(
         base_url=base_url,
@@ -821,6 +830,7 @@ def main():
         lang=args.lang,
     )
 
+<<<<<<< HEAD
 <<<<<<< HEAD
     # Determine system prompt based on whether using Ollama
     if args.use_ollama:
@@ -836,11 +846,16 @@ def main():
         agent_config = AgentConfig(
             max_steps=args.max_steps,
 =======
+=======
+>>>>>>> 326cadd5d3e75751468294ee2dee85b5f77a07b2
     if device_type == DeviceType.IOS:
         # Create iOS agent
         agent_config = IOSAgentConfig(
             max_steps=args.max_steps,
             wda_url=args.wda_url,
+<<<<<<< HEAD
+>>>>>>> 326cadd5d3e75751468294ee2dee85b5f77a07b2
+=======
 >>>>>>> 326cadd5d3e75751468294ee2dee85b5f77a07b2
             device_id=args.device_id,
             verbose=not args.quiet,
