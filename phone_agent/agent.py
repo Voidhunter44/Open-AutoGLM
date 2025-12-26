@@ -19,7 +19,7 @@ class AgentConfig:
 
     max_steps: int = 100
     device_id: str | None = None
-    lang: str = "cn"
+    lang: str = "en"
     system_prompt: str | None = None
     verbose: bool = True
 

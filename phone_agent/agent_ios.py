@@ -21,7 +21,7 @@ class IOSAgentConfig:
     wda_url: str = "http://localhost:8100"
     session_id: str | None = None
     device_id: str | None = None  # iOS device UDID
-    lang: str = "cn"
+    lang: str = "en"
     system_prompt: str | None = None
     verbose: bool = True
 
