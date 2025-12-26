@@ -1,14 +1,8 @@
-"""Action handler for processing AI model outputs."""
+"""Action handlers for PhoneAgent operations."""
 
 import ast
-import re
-import subprocess
-import time
 from dataclasses import dataclass
-from typing import Any, Callable
-
-from phone_agent.config.timing import TIMING_CONFIG
-from phone_agent.device_factory import get_device_factory
+from typing import Any
 
 
 @dataclass
@@ -16,306 +10,230 @@ class ActionResult:
     """Result of an action execution."""
 
     success: bool
-    should_finish: bool
-    message: str | None = None
-    requires_confirmation: bool = False
+    should_finish: bool = False
+    message: str = ""
+    extra_info: dict[str, Any] = None
+import subprocess
+from typing import Any
+
+from phone_agent.adb import ADBConnection
+from phone_agent.config import get_messages
+from phone_agent.hdc import HDCConnection
 
 
 class ActionHandler:
     """
-    Handles execution of actions from AI model output.
+    Handler for phone operations (tap, type, swipe, etc.).
 
     Args:
-        device_id: Optional ADB device ID for multi-device setups.
+        device_id: ADB/HDC device ID for multi-device setups.
         confirmation_callback: Optional callback for sensitive action confirmation.
-            Should return True to proceed, False to cancel.
-        takeover_callback: Optional callback for takeover requests (login, captcha).
+        takeover_callback: Optional callback for manual operation requests.
     """
 
     def __init__(
         self,
         device_id: str | None = None,
-        confirmation_callback: Callable[[str], bool] | None = None,
-        takeover_callback: Callable[[str], None] | None = None,
+        confirmation_callback=None,
+        takeover_callback=None,
     ):
         self.device_id = device_id
-        self.confirmation_callback = confirmation_callback or self._default_confirmation
-        self.takeover_callback = takeover_callback or self._default_takeover
+        self.confirmation_callback = confirmation_callback
+        self.takeover_callback = takeover_callback
 
-    def execute(
-        self, action: dict[str, Any], screen_width: int, screen_height: int
-    ) -> ActionResult:
+        # Detect device type automatically
+        self._detect_device_type()
+
+    def _detect_device_type(self) -> None:
+        """Detect whether the device is ADB (Android) or HDC (HarmonyOS) based."""
+        if self.device_id:
+            if ":" in self.device_id and not self.device_id.startswith("emulator"):
+                # Remote device - likely ADB for Android
+                self.device_type = "adb"
+            else:
+                # Check if device ID exists in ADB or HDC
+                try:
+                    result = subprocess.run(
+                        ["adb", "devices"], capture_output=True, text=True
+                    )
+                    if self.device_id in result.stdout:
+                        self.device_type = "adb"
+                    else:
+                        result = subprocess.run(
+                            ["hdc", "list", "targets"], capture_output=True, text=True
+                        )
+                        if self.device_id in result.stdout:
+                            self.device_type = "hdc"
+                        else:
+                            # Default to ADB if not found
+                            self.device_type = "adb"
+                except:
+                    # If commands fail, default to ADB
+                    self.device_type = "adb"
+        else:
+            # Auto-detect using available devices
+            try:
+                result = subprocess.run(
+                    ["adb", "devices"], capture_output=True, text=True
+                )
+                adb_devices = [
+                    line.split()[0]
+                    for line in result.stdout.strip().split("\n")[1:]
+                    if line.strip() and "\tdevice" in line
+                ]
+
+                if adb_devices:
+                    self.device_type = "adb"
+                    if not self.device_id and adb_devices:
+                        self.device_id = adb_devices[0]
+                else:
+                    result = subprocess.run(
+                        ["hdc", "list", "targets"], capture_output=True, text=True
+                    )
+                    hdc_devices = [
+                        line.split()[0]
+                        for line in result.stdout.strip().split("\n")
+                        if line.strip() and "typ:hw" in line
+                    ]
+                    
+                    if hdc_devices:
+                        self.device_type = "hdc"
+                        if not self.device_id and hdc_devices:
+                            self.device_id = hdc_devices[0]
+                    else:
+                        # Default to ADB if no devices found
+                        self.device_type = "adb"
+            except:
+                # If detection fails, default to ADB
+                self.device_type = "adb"
+
+    def execute(self, action: dict[str, Any], screen_width: int, screen_height: int):
         """
-        Execute an action from the AI model.
+        Execute an action on the phone.
 
         Args:
-            action: The action dictionary from the model.
-            screen_width: Current screen width in pixels.
-            screen_height: Current screen height in pixels.
+            action: Action dictionary with type and parameters.
+            screen_width: Current screen width for coordinate normalization.
+            screen_height: Current screen height for coordinate normalization.
 
         Returns:
-            ActionResult indicating success and whether to finish.
+            Action execution result.
         """
-        action_type = action.get("_metadata")
+        action_type = action.get("_metadata", "")
+        lang = action.get("lang", "cn")
+        messages = get_messages(lang)
 
-        if action_type == "finish":
-            return ActionResult(
-                success=True, should_finish=True, message=action.get("message")
-            )
-
-        if action_type != "do":
-            return ActionResult(
-                success=False,
-                should_finish=True,
-                message=f"Unknown action type: {action_type}",
-            )
-
-        action_name = action.get("action")
-        handler_method = self._get_handler(action_name)
-
-        if handler_method is None:
-            return ActionResult(
-                success=False,
-                should_finish=False,
-                message=f"Unknown action: {action_name}",
-            )
-
-        try:
-            return handler_method(action, screen_width, screen_height)
-        except Exception as e:
-            return ActionResult(
-                success=False, should_finish=False, message=f"Action failed: {e}"
-            )
-
-    def _get_handler(self, action_name: str) -> Callable | None:
-        """Get the handler method for an action."""
-        handlers = {
-            "Launch": self._handle_launch,
-            "Tap": self._handle_tap,
-            "Type": self._handle_type,
-            "Type_Name": self._handle_type,
-            "Swipe": self._handle_swipe,
-            "Back": self._handle_back,
-            "Home": self._handle_home,
-            "Double Tap": self._handle_double_tap,
-            "Long Press": self._handle_long_press,
-            "Wait": self._handle_wait,
-            "Take_over": self._handle_takeover,
-            "Note": self._handle_note,
-            "Call_API": self._handle_call_api,
-            "Interact": self._handle_interact,
-        }
-        return handlers.get(action_name)
-
-    def _convert_relative_to_absolute(
-        self, element: list[int], screen_width: int, screen_height: int
-    ) -> tuple[int, int]:
-        """Convert relative coordinates (0-1000) to absolute pixels."""
-        x = int(element[0] / 1000 * screen_width)
-        y = int(element[1] / 1000 * screen_height)
-        return x, y
-
-    def _handle_launch(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle app launch action."""
-        app_name = action.get("app")
-        if not app_name:
-            return ActionResult(False, False, "No app name specified")
-
-        device_factory = get_device_factory()
-        success = device_factory.launch_app(app_name, self.device_id)
-        if success:
-            return ActionResult(True, False)
-        return ActionResult(False, False, f"App not found: {app_name}")
-
-    def _handle_tap(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle tap action."""
-        element = action.get("element")
-        if not element:
-            return ActionResult(False, False, "No element coordinates")
-
-        x, y = self._convert_relative_to_absolute(element, width, height)
-
-        # Check for sensitive operation
-        if "message" in action:
-            if not self.confirmation_callback(action["message"]):
-                return ActionResult(
-                    success=False,
-                    should_finish=True,
-                    message="User cancelled sensitive operation",
-                )
-
-        device_factory = get_device_factory()
-        device_factory.tap(x, y, self.device_id)
-        return ActionResult(True, False)
-
-    def _handle_type(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle text input action."""
-        text = action.get("text", "")
-
-        device_factory = get_device_factory()
-
-        # Switch to ADB keyboard
-        original_ime = device_factory.detect_and_set_adb_keyboard(self.device_id)
-        time.sleep(TIMING_CONFIG.action.keyboard_switch_delay)
-
-        # Clear existing text and type new text
-        device_factory.clear_text(self.device_id)
-        time.sleep(TIMING_CONFIG.action.text_clear_delay)
-
-        # Handle multiline text by splitting on newlines
-        device_factory.type_text(text, self.device_id)
-        time.sleep(TIMING_CONFIG.action.text_input_delay)
-
-        # Restore original keyboard
-        device_factory.restore_keyboard(original_ime, self.device_id)
-        time.sleep(TIMING_CONFIG.action.keyboard_restore_delay)
-
-        return ActionResult(True, False)
-
-    def _handle_swipe(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle swipe action."""
-        start = action.get("start")
-        end = action.get("end")
-
-        if not start or not end:
-            return ActionResult(False, False, "Missing swipe coordinates")
-
-        start_x, start_y = self._convert_relative_to_absolute(start, width, height)
-        end_x, end_y = self._convert_relative_to_absolute(end, width, height)
-
-        device_factory = get_device_factory()
-        device_factory.swipe(start_x, start_y, end_x, end_y, device_id=self.device_id)
-        return ActionResult(True, False)
-
-    def _handle_back(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle back button action."""
-        device_factory = get_device_factory()
-        device_factory.back(self.device_id)
-        return ActionResult(True, False)
-
-    def _handle_home(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle home button action."""
-        device_factory = get_device_factory()
-        device_factory.home(self.device_id)
-        return ActionResult(True, False)
-
-    def _handle_double_tap(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle double tap action."""
-        element = action.get("element")
-        if not element:
-            return ActionResult(False, False, "No element coordinates")
-
-        x, y = self._convert_relative_to_absolute(element, width, height)
-        device_factory = get_device_factory()
-        device_factory.double_tap(x, y, self.device_id)
-        return ActionResult(True, False)
-
-    def _handle_long_press(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle long press action."""
-        element = action.get("element")
-        if not element:
-            return ActionResult(False, False, "No element coordinates")
-
-        x, y = self._convert_relative_to_absolute(element, width, height)
-        device_factory = get_device_factory()
-        device_factory.long_press(x, y, device_id=self.device_id)
-        return ActionResult(True, False)
-
-    def _handle_wait(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle wait action."""
-        duration_str = action.get("duration", "1 seconds")
-        try:
-            duration = float(duration_str.replace("seconds", "").strip())
-        except ValueError:
-            duration = 1.0
-
-        time.sleep(duration)
-        return ActionResult(True, False)
-
-    def _handle_takeover(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle takeover request (login, captcha, etc.)."""
-        message = action.get("message", "User intervention required")
-        self.takeover_callback(message)
-        return ActionResult(True, False)
-
-    def _handle_note(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle note action (placeholder for content recording)."""
-        # This action is typically used for recording page content
-        # Implementation depends on specific requirements
-        return ActionResult(True, False)
-
-    def _handle_call_api(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle API call action (placeholder for summarization)."""
-        # This action is typically used for content summarization
-        # Implementation depends on specific requirements
-        return ActionResult(True, False)
-
-    def _handle_interact(self, action: dict, width: int, height: int) -> ActionResult:
-        """Handle interaction request (user choice needed)."""
-        # This action signals that user input is needed
-        return ActionResult(True, False, message="User interaction required")
-
-    def _send_keyevent(self, keycode: str) -> None:
-        """Send a keyevent to the device."""
-        from phone_agent.device_factory import DeviceType, get_device_factory
-        from phone_agent.hdc.connection import _run_hdc_command
-
-        device_factory = get_device_factory()
-
-        # Handle HDC devices with HarmonyOS-specific keyEvent command
-        if device_factory.device_type == DeviceType.HDC:
-            hdc_prefix = ["hdc", "-t", self.device_id] if self.device_id else ["hdc"]
-            
-            # Map common keycodes to HarmonyOS keyEvent codes
-            # KEYCODE_ENTER (66) -> 2054 (HarmonyOS Enter key code)
-            if keycode == "KEYCODE_ENTER" or keycode == "66":
-                _run_hdc_command(
-                    hdc_prefix + ["shell", "uitest", "uiInput", "keyEvent", "2054"],
-                    capture_output=True,
-                    text=True,
-                )
+        if action_type == "takeover":
+            message = action.get("message", messages["manual_operation"])
+            if self.takeover_callback:
+                self.takeover_callback(message)
             else:
-                # For other keys, try to use the numeric code directly
-                # If keycode is a string like "KEYCODE_ENTER", convert it
-                try:
-                    # Try to extract numeric code from string or use as-is
-                    if keycode.startswith("KEYCODE_"):
-                        # For now, only handle ENTER, other keys may need mapping
-                        if "ENTER" in keycode:
-                            _run_hdc_command(
-                                hdc_prefix + ["shell", "uitest", "uiInput", "keyEvent", "2054"],
-                                capture_output=True,
-                                text=True,
-                            )
-                        else:
-                            # Fallback to ADB-style command for unsupported keys
-                            subprocess.run(
-                                hdc_prefix + ["shell", "input", "keyevent", keycode],
-                                capture_output=True,
-                                text=True,
-                            )
-                    else:
-                        # Assume it's a numeric code
-                        _run_hdc_command(
-                            hdc_prefix + ["shell", "uitest", "uiInput", "keyEvent", str(keycode)],
-                            capture_output=True,
-                            text=True,
-                        )
-                except Exception:
-                    # Fallback to ADB-style command
-                    subprocess.run(
-                        hdc_prefix + ["shell", "input", "keyevent", keycode],
-                        capture_output=True,
-                        text=True,
-                    )
+                input(f"{message}\n" + messages["press_enter_when_done"])
+            return {"success": True, "should_finish": False}
+
+        elif action_type == "confirm":
+            message = action.get("message", messages["operation_confirmation"])
+            if self.confirmation_callback:
+                confirmed = self.confirmation_callback(message)
+            else:
+                confirmed = input(f"{message} (y/N): ").lower() == "y"
+            
+            if not confirmed:
+                return {"success": False, "should_finish": False}
+        
+        # Normalize coordinates if needed
+        if "element" in action and isinstance(action["element"], list):
+            x, y = action["element"]
+            if x <= 1.0 and y <= 1.0:
+                # Coordinates are normalized, convert to absolute
+                action["element"] = [int(x * screen_width), int(y * screen_height)]
+        
+        if "start" in action and "end" in action:
+            start_x, start_y = action["start"]
+            end_x, end_y = action["end"]
+            if (start_x <= 1.0 and start_y <= 1.0) and (end_x <= 1.0 and end_y <= 1.0):
+                # Coordinates are normalized, convert to absolute
+                action["start"] = [int(start_x * screen_width), int(start_y * screen_height)]
+                action["end"] = [int(end_x * screen_width), int(end_y * screen_height)]
+
+        # Execute action based on type
+        action_name = action.get("action", "").lower()
+
+        if self.device_type == "hdc":
+            connection = HDCConnection(self.device_id)
         else:
-            # ADB devices use standard input keyevent command
-            cmd_prefix = ["adb", "-s", self.device_id] if self.device_id else ["adb"]
-            subprocess.run(
-                cmd_prefix + ["shell", "input", "keyevent", keycode],
-                capture_output=True,
-                text=True,
-            )
+            connection = ADBConnection(self.device_id)
+
+        if action_name == "tap":
+            x, y = action["element"]
+            connection.tap(x, y)
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "long press" or action_name == "long_press":
+            x, y = action["element"]
+            duration = action.get("duration", 3000)  # Default 3 seconds
+            connection.long_press(x, y, duration)
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "double tap" or action_name == "double_tap":
+            x, y = action["element"]
+            connection.double_tap(x, y)
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "swipe":
+            start_x, start_y = action["start"]
+            end_x, end_y = action["end"]
+            duration = action.get("duration")
+            connection.swipe(start_x, start_y, end_x, end_y, duration)
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "type" or action_name == "input_text":
+            text = action["text"]
+            connection.type_text(text)
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "launch" or action_name == "open_app":
+            app_name = action["app"]
+            success = connection.launch_app(app_name)
+            return {"success": success, "should_finish": not success}
+
+        elif action_name == "back":
+            connection.back()
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "home":
+            connection.home()
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "clear_text":
+            connection.clear_text()
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "keyevent":
+            key_code = action["key"]
+            connection.keyevent(key_code)
+            return {"success": True, "should_finish": False}
+
+        elif action_name == "finish":
+            return {"success": True, "should_finish": True, "message": action.get("message", "")}
+
+        else:
+            # Unknown action type
+            return {"success": False, "should_finish": False, "error": f"Unknown action: {action_name}"}
+
+    def keyevent(self, keycode: str) -> None:
+        """
+        Send a key event to the device.
+
+        Args:
+            keycode: Key code to send (e.g., "KEYCODE_POWER", "KEYCODE_VOLUME_UP").
+        """
+        if self.device_type == "hdc":
+            connection = HDCConnection(self.device_id)
+        else:
+            connection = ADBConnection(self.device_id)
+
+        connection.keyevent(keycode)
 
     @staticmethod
     def _default_confirmation(message: str) -> bool:
@@ -345,6 +263,40 @@ def parse_action(response: str) -> dict[str, Any]:
     print(f"Parsing action: {response}")
     try:
         response = response.strip()
+        
+        # Remove XML tags and other artifacts that might be in the response
+        response = response.replace("<answer>", "").replace("</answer>", "").strip()
+        response = response.replace("<solution>", "").replace("</solution>", "").strip()
+        response = response.replace("<result>", "").replace("</result>", "").strip()
+        
+        # Handle cases where there's trailing text after the action
+        # Find the matching parentheses for the action function
+        if response.startswith(("do(", "finish(")):
+            paren_count = 0
+            paren_start = -1
+            
+            for i, char in enumerate(response):
+                if char == '(':
+                    if paren_start == -1:
+                        paren_start = i
+                    paren_count += 1
+                elif char == ')':
+                    paren_count -= 1
+                    if paren_count == 0 and paren_start != -1:
+                        # Found the matching closing parenthesis
+                        response = response[:i+1]
+                        break
+        
+        # Clean up any remaining artifacts after extracting the action
+        if '\n' in response:
+            # Take only the first line that contains the action
+            lines = response.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line and (line.startswith('do(') or line.startswith('finish(')):
+                    response = line
+                    break
+
         if response.startswith('do(action="Type"') or response.startswith(
             'do(action="Type_Name"'
         ):
@@ -376,13 +328,26 @@ def parse_action(response: str) -> dict[str, Any]:
                 raise ValueError(f"Failed to parse do() action: {e}")
 
         elif response.startswith("finish"):
-            action = {
-                "_metadata": "finish",
-                "message": response.replace("finish(message=", "")[1:-2],
-            }
+            # Extract message from finish action
+            try:
+                # Find the message part: finish(message="...")
+                start_idx = response.find('message="')
+                if start_idx != -1:
+                    start_idx += len('message="')
+                    end_idx = response.rfind('"')
+                    if end_idx > start_idx:
+                        message = response[start_idx:end_idx]
+                        return {"_metadata": "finish", "message": message}
+                
+                # If we can't extract the message properly, return the cleaned response
+                message = response.replace("finish(message=", "").rstrip(')').strip('"')
+                return {"_metadata": "finish", "message": message}
+            except:
+                # Fallback: return the whole response as message
+                message = response.replace("finish(", "").replace(")", "")
+                return {"_metadata": "finish", "message": message}
         else:
             raise ValueError(f"Failed to parse action: {response}")
-        return action
     except Exception as e:
         raise ValueError(f"Failed to parse action: {e}")
 
