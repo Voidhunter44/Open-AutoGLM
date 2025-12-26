@@ -159,67 +159,112 @@ class ActionHandler:
         # Execute action based on type
         action_name = action.get("action", "").lower()
 
-        if self.device_type == "hdc":
-            connection = HDCConnection(self.device_id)
-        else:
-            connection = ADBConnection(self.device_id)
-
         if action_name == "tap":
             x, y = action["element"]
-            connection.tap(x, y)
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.device import tap as hdc_tap
+                hdc_tap(x, y, device_id=self.device_id)
+            else:
+                from phone_agent.adb.device import tap as adb_tap
+                adb_tap(x, y, device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "long press" or action_name == "long_press":
             x, y = action["element"]
             duration = action.get("duration", 3000)  # Default 3 seconds
-            connection.long_press(x, y, duration)
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.device import long_press as hdc_long_press
+                hdc_long_press(x, y, duration, device_id=self.device_id)
+            else:
+                from phone_agent.adb.device import long_press as adb_long_press
+                adb_long_press(x, y, duration, device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "double tap" or action_name == "double_tap":
             x, y = action["element"]
-            connection.double_tap(x, y)
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.device import double_tap as hdc_double_tap
+                hdc_double_tap(x, y, device_id=self.device_id)
+            else:
+                from phone_agent.adb.device import double_tap as adb_double_tap
+                adb_double_tap(x, y, device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "swipe":
             start_x, start_y = action["start"]
             end_x, end_y = action["end"]
             duration = action.get("duration")
-            connection.swipe(start_x, start_y, end_x, end_y, duration)
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.device import swipe as hdc_swipe
+                hdc_swipe(start_x, start_y, end_x, end_y, duration, device_id=self.device_id)
+            else:
+                from phone_agent.adb.device import swipe as adb_swipe
+                adb_swipe(start_x, start_y, end_x, end_y, duration, device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "type" or action_name == "input_text":
             text = action["text"]
-            connection.type_text(text)
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.input import type_text as hdc_type_text
+                hdc_type_text(text, device_id=self.device_id)
+            else:
+                from phone_agent.adb.input import type_text as adb_type_text
+                adb_type_text(text, device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "launch" or action_name == "open_app":
             app_name = action["app"]
-            success = connection.launch_app(app_name)
-            return {"success": success, "should_finish": not success}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.device import launch_app as hdc_launch_app
+                success = hdc_launch_app(app_name, device_id=self.device_id)
+            else:
+                from phone_agent.adb.device import launch_app as adb_launch_app
+                success = adb_launch_app(app_name, device_id=self.device_id)
+            return ActionResult(success=success, should_finish=not success)
 
         elif action_name == "back":
-            connection.back()
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.device import back as hdc_back
+                hdc_back(device_id=self.device_id)
+            else:
+                from phone_agent.adb.device import back as adb_back
+                adb_back(device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "home":
-            connection.home()
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.device import home as hdc_home
+                hdc_home(device_id=self.device_id)
+            else:
+                from phone_agent.adb.device import home as adb_home
+                adb_home(device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "clear_text":
-            connection.clear_text()
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.input import clear_text as hdc_clear_text
+                hdc_clear_text(device_id=self.device_id)
+            else:
+                from phone_agent.adb.input import clear_text as adb_clear_text
+                adb_clear_text(device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "keyevent":
             key_code = action["key"]
-            connection.keyevent(key_code)
-            return {"success": True, "should_finish": False}
+            if self.device_type == "hdc":
+                from phone_agent.hdc.input import keyevent as hdc_keyevent
+                hdc_keyevent(key_code, device_id=self.device_id)
+            else:
+                from phone_agent.adb.input import keyevent as adb_keyevent
+                adb_keyevent(key_code, device_id=self.device_id)
+            return ActionResult(success=True, should_finish=False)
 
         elif action_name == "finish":
-            return {"success": True, "should_finish": True, "message": action.get("message", "")}
+            return ActionResult(success=True, should_finish=True, message=action.get("message", ""))
 
         else:
             # Unknown action type
-            return {"success": False, "should_finish": False, "error": f"Unknown action: {action_name}"}
+            return ActionResult(success=False, should_finish=False, message=f"Unknown action: {action_name}")
 
     def keyevent(self, keycode: str) -> None:
         """
@@ -229,11 +274,11 @@ class ActionHandler:
             keycode: Key code to send (e.g., "KEYCODE_POWER", "KEYCODE_VOLUME_UP").
         """
         if self.device_type == "hdc":
-            connection = HDCConnection(self.device_id)
+            from phone_agent.hdc.input import keyevent as hdc_keyevent
+            hdc_keyevent(keycode, device_id=self.device_id)
         else:
-            connection = ADBConnection(self.device_id)
-
-        connection.keyevent(keycode)
+            from phone_agent.adb.input import keyevent as adb_keyevent
+            adb_keyevent(keycode, device_id=self.device_id)
 
     @staticmethod
     def _default_confirmation(message: str) -> bool:
