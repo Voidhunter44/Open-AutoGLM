@@ -28,17 +28,22 @@ from phone_agent.agent import AgentConfig
 from phone_agent.config.apps import list_supported_apps
 from phone_agent.config.config_ollama import OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL
 from phone_agent.config.prompts_ollama import SYSTEM_PROMPT as OLLAMA_SYSTEM_PROMPT
+from phone_agent.device_factory import DeviceType, get_device_factory, set_device_type
 from phone_agent.model import ModelConfig
 
 
-def check_system_requirements() -> bool:
+def check_system_requirements(device_type: DeviceType = DeviceType.ADB) -> bool:
     """
     Check system requirements before running the agent.
 
     Checks:
-    1. ADB tools installed
+    1. ADB/HDC/iOS tools installed
     2. At least one device connected
-    3. ADB Keyboard installed on the device
+    3. ADB Keyboard installed on the device (for ADB only)
+    4. WebDriverAgent running (for iOS only)
+
+    Args:
+        device_type: Type of device tool (ADB, HDC, or IOS).
 
     Returns:
         True if all checks pass, False otherwise.
@@ -48,41 +53,58 @@ def check_system_requirements() -> bool:
 
     all_passed = True
 
-    # Check 1: ADB installed
-    print("1. Checking ADB installation...", end=" ")
-    if shutil.which("adb") is None:
+    # Determine tool name and command
+    if device_type == DeviceType.IOS:
+        tool_name = "libimobiledevice"
+        tool_cmd = "idevice_id"
+    else:
+        tool_name = "ADB" if device_type == DeviceType.ADB else "HDC"
+        tool_cmd = "adb" if device_type == DeviceType.ADB else "hdc"
+
+    # Check 1: Tool installed
+    print(f"1. Checking {tool_name} installation...", end=" ")
+    if shutil.which(tool_cmd) is None:
         print("❌ FAILED")
-        print("   Error: ADB is not installed or not in PATH.")
-        print("   Solution: Install Android SDK Platform Tools:")
-        print("     - macOS: brew install android-platform-tools")
-        print("     - Linux: sudo apt install android-tools-adb")
-        print(
-            "     - Windows: Download from https://developer.android.com/studio/releases/platform-tools"
-        )
+        print(f"   Error: {tool_name} is not installed or not in PATH.")
+
+        if device_type == DeviceType.ADB:
+            print("   Solution: Install Android SDK Platform Tools:")
+            print("     - macOS: brew install android-platform-tools")
+            print("     - Linux: sudo apt install android-tools-adb")
+            print(
+                "     - Windows: Download from https://developer.android.com/studio/releases/platform-tools"
+            )
+        elif device_type == DeviceType.HDC:
+            print("   Solution: Install HarmonyOS SDK Platform Tools")
+        else:  # IOS
+            print("   Solution: Install libimobiledevice tools:")
+            print("     - macOS: brew install libimobiledevice")
+            print("     - Linux: sudo apt install libimobiledevice-dev")
         all_passed = False
     else:
-        # Double check by running adb version
+        # Double check by running tool version
         try:
             result = subprocess.run(
-                ["adb", "version"], capture_output=True, text=True, timeout=10
+                [tool_cmd, "version" if tool_cmd != "idevice_id" else "list"],
+                capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
                 version_line = result.stdout.strip().split("\n")[0]
                 print(f"✅ OK ({version_line})")
             else:
                 print("❌ FAILED")
-                print("   Error: ADB command failed to run.")
+                print(f"   Error: {tool_name} command failed to run.")
                 all_passed = False
         except FileNotFoundError:
             print("❌ FAILED")
-            print("   Error: ADB command not found.")
+            print(f"   Error: {tool_name} command not found.")
             all_passed = False
         except subprocess.TimeoutExpired:
             print("❌ FAILED")
-            print("   Error: ADB command timed out.")
+            print(f"   Error: {tool_name} command timed out.")
             all_passed = False
 
-    # If ADB is not installed, skip remaining checks
+    # If tool is not installed, skip remaining checks
     if not all_passed:
         print("-" * 50)
         print("❌ System check failed. Please fix the issues above.")
@@ -91,73 +113,131 @@ def check_system_requirements() -> bool:
     # Check 2: Device connected
     print("2. Checking connected devices...", end=" ")
     try:
-        result = subprocess.run(
-            ["adb", "devices"], capture_output=True, text=True, timeout=10
-        )
-        lines = result.stdout.strip().split("\n")
-        # Filter out header and empty lines, look for 'device' status
-        devices = [line for line in lines[1:] if line.strip() and "\tdevice" in line]
+        if device_type == DeviceType.ADB:
+            result = subprocess.run(
+                ["adb", "devices"], capture_output=True, text=True, timeout=10
+            )
+            lines = result.stdout.strip().split("\n")
+            # Filter out header and empty lines, look for 'device' status
+            devices = [line for line in lines[1:] if line.strip() and "\tdevice" in line]
 
-        if not devices:
-            print("❌ FAILED")
-            print("   Error: No devices connected.")
-            print("   Solution:")
-            print("     1. Enable USB debugging on your Android device")
-            print("     2. Connect via USB and authorize the connection")
-            print("     3. Or connect remotely: python main.py --connect <ip>:<port>")
-            all_passed = False
-        else:
-            device_ids = [d.split("\t")[0] for d in devices]
-            print(f"✅ OK ({len(devices)} device(s): {', '.join(device_ids)})")
+            if not devices:
+                print("❌ FAILED")
+                print("   Error: No Android devices connected.")
+                print("   Solution:")
+                print("     1. Enable USB debugging on your Android device")
+                print("     2. Connect via USB and authorize the connection")
+                print("     3. Or connect remotely: python main.py --connect <ip>:<port>")
+                all_passed = False
+            else:
+                device_ids = [d.split("\t")[0] for d in devices]
+                print(f"✅ OK ({len(devices)} device(s): {', '.join(device_ids)})")
+        elif device_type == DeviceType.HDC:
+            result = subprocess.run(
+                ["hdc", "list", "targets"], capture_output=True, text=True, timeout=10
+            )
+            lines = result.stdout.strip().split("\n")
+            # Filter out header and empty lines, look for devices
+            devices = [line for line in lines if line.strip() and "offline" not in line.lower()]
+
+            if not devices:
+                print("❌ FAILED")
+                print("   Error: No HarmonyOS devices connected.")
+                print("   Solution:")
+                print("     1. Enable USB debugging on your HarmonyOS device")
+                print("     2. Connect via USB and authorize the connection")
+                all_passed = False
+            else:
+                device_ids = [line.split()[0] for line in devices if line.strip()]
+                print(f"✅ OK ({len(devices)} device(s): {', '.join(device_ids)})")
+        else:  # DeviceType.IOS
+            result = subprocess.run(
+                ["idevice_id", "-l"], capture_output=True, text=True, timeout=10
+            )
+            device_ids = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+
+            if not device_ids or (len(device_ids) == 1 and device_ids[0] == ""):
+                print("❌ FAILED")
+                print("   Error: No iOS devices connected.")
+                print("   Solution:")
+                print("     1. Connect iOS device via USB")
+                print("     2. Trust the computer on the device if prompted")
+                print("     3. Ensure iTunes/Finder recognizes the device")
+                all_passed = False
+            else:
+                print(f"✅ OK ({len(device_ids)} device(s): {', '.join(device_ids[:3])}{'...' if len(device_ids) > 3 else ''})")
     except subprocess.TimeoutExpired:
         print("❌ FAILED")
-        print("   Error: ADB command timed out.")
+        print(f"   Error: {tool_cmd} command timed out.")
         all_passed = False
     except Exception as e:
         print("❌ FAILED")
         print(f"   Error: {e}")
         all_passed = False
 
-    # If no device connected, skip ADB Keyboard check
+    # If no device connected, skip further checks
     if not all_passed:
         print("-" * 50)
         print("❌ System check failed. Please fix the issues above.")
         return False
 
-    # Check 3: ADB Keyboard installed
-    print("3. Checking ADB Keyboard...", end=" ")
-    try:
-        result = subprocess.run(
-            ["adb", "shell", "ime", "list", "-s"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        ime_list = result.stdout.strip()
+    # For ADB devices, check ADB Keyboard
+    if device_type == DeviceType.ADB:
+        print("3. Checking ADB Keyboard...", end=" ")
+        try:
+            result = subprocess.run(
+                ["adb", "shell", "ime", "list", "-s"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            ime_list = result.stdout.strip()
 
-        if "com.android.adbkeyboard/.AdbIME" in ime_list:
-            print("✅ OK")
-        else:
+            if "com.android.adbkeyboard/.AdbIME" in ime_list:
+                print("✅ OK")
+            else:
+                print("❌ FAILED")
+                print("   Error: ADB Keyboard is not installed on the device.")
+                print("   Solution:")
+                print("     1. Download ADB Keyboard APK from:")
+                print(
+                    "        https://github.com/senzhk/ADBKeyBoard/blob/master/ADBKeyboard.apk"
+                )
+                print("     2. Install it on your device: adb install ADBKeyboard.apk")
+                print(
+                    "     3. Enable it in Settings > System > Languages & Input > Virtual Keyboard"
+                )
+                all_passed = False
+        except subprocess.TimeoutExpired:
             print("❌ FAILED")
-            print("   Error: ADB Keyboard is not installed on the device.")
-            print("   Solution:")
-            print("     1. Download ADB Keyboard APK from:")
-            print(
-                "        https://github.com/senzhk/ADBKeyBoard/blob/master/ADBKeyboard.apk"
-            )
-            print("     2. Install it on your device: adb install ADBKeyboard.apk")
-            print(
-                "     3. Enable it in Settings > System > Languages & Input > Virtual Keyboard"
-            )
+            print("   Error: ADB command timed out.")
             all_passed = False
-    except subprocess.TimeoutExpired:
-        print("❌ FAILED")
-        print("   Error: ADB command timed out.")
-        all_passed = False
-    except Exception as e:
-        print("❌ FAILED")
-        print(f"   Error: {e}")
-        all_passed = False
+        except Exception as e:
+            print("❌ FAILED")
+            print(f"   Error: {e}")
+            all_passed = False
+
+    # For iOS devices, check WDA
+    if device_type == DeviceType.IOS:
+        print("3. Checking WebDriverAgent...", end=" ")
+        try:
+            import requests
+            response = requests.get("http://localhost:8100/status", timeout=5)
+            if response.status_code == 200:
+                print("✅ OK")
+            else:
+                print("⚠️  WARNING")
+                print("   WDA may not be running. Some features may not work properly.")
+                print("   Solution: Start WebDriverAgent on your iOS device.")
+        except requests.exceptions.ConnectionError:
+            print("⚠️  WARNING")
+            print("   WDA is not accessible at http://localhost:8100")
+            print("   Some features may not work properly.")
+            print("   Solution: Start WebDriverAgent on your iOS device.")
+        except Exception as e:
+            print("⚠️  WARNING")
+            print(f"   Error checking WDA: {e}")
+            print("   Some features may not work properly.")
 
     print("-" * 50)
 
@@ -368,11 +448,19 @@ Examples:
 
     # Device options
     parser.add_argument(
+        "--device-type",
+        type=str,
+        choices=["adb", "hdc", "ios"],
+        default=os.getenv("PHONE_AGENT_DEVICE_TYPE", "adb"),
+        help="Type of device connection: adb (Android), hdc (HarmonyOS), or ios (Apple)",
+    )
+
+    parser.add_argument(
         "--device-id",
         "-d",
         type=str,
         default=os.getenv("PHONE_AGENT_DEVICE_ID"),
-        help="ADB device ID",
+        help="Device ID (for ADB, HDC, or iOS)",
     )
 
     parser.add_argument(
@@ -380,7 +468,7 @@ Examples:
         "-c",
         type=str,
         metavar="ADDRESS",
-        help="Connect to remote device (e.g., 192.168.1.100:5555)",
+        help="Connect to remote device (e.g., 192.168.1.100:5555 for ADB)",
     )
 
     parser.add_argument(
@@ -402,7 +490,7 @@ Examples:
         nargs="?",
         const=5555,
         metavar="PORT",
-        help="Enable TCP/IP debugging on USB device (default port: 5555)",
+        help="Enable TCP/IP debugging on USB device (default port: 5555, ADB only)",
     )
 
     # Other options
@@ -445,25 +533,44 @@ def handle_device_commands(args) -> bool:
     Returns:
         True if a device command was handled (should exit), False otherwise.
     """
+    # Map device type strings to enums
+    device_type_map = {
+        "adb": DeviceType.ADB,
+        "hdc": DeviceType.HDC,
+        "ios": DeviceType.IOS,
+    }
+
+    # Set the device type globally
+    device_type = device_type_map[args.device_type]
+    set_device_type(device_type)
+
     # Handle --list-devices
     if args.list_devices:
-        devices = list_devices()
-        if not devices:
-            print("No devices connected.")
-        else:
-            print("Connected devices:")
-            print("-" * 60)
-            for device in devices:
-                status_icon = "✓" if device.status == "device" else "✗"
-                conn_type = device.connection_type.value
-                model_info = f" ({device.model})" if device.model else ""
-                print(
-                    f"  {status_icon} {device.device_id:<30} [{conn_type}]{model_info}"
-                )
+        device_factory = get_device_factory()
+        try:
+            devices = device_factory.list_devices()
+            if not devices:
+                print("No devices connected.")
+            else:
+                print(f"Connected {args.device_type.upper()} devices:")
+                print("-" * 60)
+                for device in devices:
+                    status_icon = "✓" if device.status == "device" else "✗"
+                    conn_type = device.connection_type.value
+                    model_info = f" ({device.model})" if device.model else ""
+                    print(
+                        f"  {status_icon} {device.device_id:<30} [{conn_type}]{model_info}"
+                    )
+        except Exception as e:
+            print(f"Error listing devices: {e}")
         return True
 
-    # Handle --connect
+    # Handle --connect (ADB only for now)
     if args.connect:
+        if device_type != DeviceType.ADB:
+            print("--connect is only supported for ADB devices")
+            return True
+
         print(f"Connecting to {args.connect}...")
         success, message = ADBConnection.connect(args.connect)
         print(f"{'✓' if success else '✗'} {message}")
@@ -472,8 +579,12 @@ def handle_device_commands(args) -> bool:
             args.device_id = args.connect
         return not success  # Continue if connection succeeded
 
-    # Handle --disconnect
+    # Handle --disconnect (ADB only for now)
     if args.disconnect:
+        if device_type != DeviceType.ADB:
+            print("--disconnect is only supported for ADB devices")
+            return True
+
         if args.disconnect == "all":
             print("Disconnecting all remote devices...")
             success, message = ADBConnection.disconnect()
@@ -483,8 +594,12 @@ def handle_device_commands(args) -> bool:
         print(f"{'✓' if success else '✗'} {message}")
         return True
 
-    # Handle --enable-tcpip
+    # Handle --enable-tcpip (ADB only)
     if args.enable_tcpip:
+        if device_type != DeviceType.ADB:
+            print("--enable-tcpip is only supported for ADB devices")
+            return True
+
         port = args.enable_tcpip
         print(f"Enabling TCP/IP debugging on port {port}...")
 
@@ -521,14 +636,25 @@ def main():
     if handle_device_commands(args):
         return
 
+    # Map device type strings to enums
+    device_type_map = {
+        "adb": DeviceType.ADB,
+        "hdc": DeviceType.HDC,
+        "ios": DeviceType.IOS,
+    }
+
+    # Set the device type globally
+    device_type = device_type_map[args.device_type]
+    set_device_type(device_type)
+
     # Run system requirements check before proceeding
-    if not check_system_requirements():
+    if not check_system_requirements(device_type):
         sys.exit(1)
 
     # Handle Ollama flag - override base_url and model if using Ollama
     base_url = args.base_url
     model_name = args.model
-    
+
     if args.use_ollama:
         base_url = OLLAMA_BASE_URL
         model_name = OLLAMA_DEFAULT_MODEL
@@ -560,11 +686,31 @@ def main():
         # Set Ollama-specific system prompt
         agent_config.system_prompt = OLLAMA_SYSTEM_PROMPT
 
-    # Create agent
-    agent = PhoneAgent(
-        model_config=model_config,
-        agent_config=agent_config,
-    )
+    # Create agent based on device type
+    if device_type == DeviceType.IOS:
+        # Use iOS-specific agent
+        from phone_agent.agent_ios import IOSPhoneAgent, IOSAgentConfig
+
+        ios_agent_config = IOSAgentConfig(
+            max_steps=args.max_steps,
+            device_id=args.device_id,
+            verbose=not args.quiet,
+            lang=args.lang,
+        )
+
+        if args.use_ollama:
+            ios_agent_config.system_prompt = OLLAMA_SYSTEM_PROMPT
+
+        agent = IOSPhoneAgent(
+            model_config=model_config,
+            agent_config=ios_agent_config,
+        )
+    else:
+        # Use standard PhoneAgent for ADB and HDC
+        agent = PhoneAgent(
+            model_config=model_config,
+            agent_config=agent_config,
+        )
 
     # Print header
     print("=" * 50)
@@ -574,9 +720,11 @@ def main():
     print(f"Base URL: {model_config.base_url}")
     print(f"Max Steps: {agent_config.max_steps}")
     print(f"Language: {agent_config.lang}")
+    print(f"Device Type: {args.device_type.upper()}")
 
     # Show device info
-    devices = list_devices()
+    device_factory = get_device_factory()
+    devices = device_factory.list_devices()
     if agent_config.device_id:
         print(f"Device: {agent_config.device_id}")
     elif devices:

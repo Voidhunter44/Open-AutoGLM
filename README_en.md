@@ -231,7 +231,7 @@ Before using the Ollama integration, ensure you have:
 1. **Ollama installed** - Download from [https://ollama.ai](https://ollama.ai) and install on your system
 2. **Qwen3-VL model pulled** - Run `ollama pull qwen3-vl:4b` to download the model
 3. **Ollama service running** - Make sure `ollama serve` is active in a terminal/command prompt
-4. **Android device connected** - Follow the ADB setup instructions in the Environment Setup section above
+4. **Android/iOS/HarmonyOS device connected** - Follow the ADB setup instructions in the Environment Setup section above
 
 ### Installing and Setting Up Ollama
 
@@ -275,17 +275,32 @@ python main.py --use-ollama "Open Chrome browser and search for news"
 python main.py --use-ollama --lang en "Open Maps and search for nearby restaurants"
 ```
 
+#### Using Different Device Types with Ollama
+
+The system now supports multiple device types (Android ADB, HarmonyOS HDC, and iOS):
+
+```bash
+# Use Ollama with Android device (default)
+python main.py --use-ollama --device-type adb "Open Chrome and search for news"
+
+# Use Ollama with iOS device
+python main.py --use-ollama --device-type ios "Open Safari and search for weather"
+
+# Use Ollama with HarmonyOS device
+python main.py --use-ollama --device-type hdc "Open Harmony browser"
+```
+
 #### Advanced Ollama Usage
 
 ```bash
 # Use Ollama with specific device (if multiple devices connected)
-python main.py --use-ollama --device-id 192.168.1.100:5555 "Send a message in WhatsApp"
+python main.py --use-ollama --device-id 192.168.1.100:5555 --device-type adb "Send a message in WhatsApp"
 
 # Use Ollama with increased step limit for complex tasks
 python main.py --use-ollama --max-steps 200 "Book a flight from Beijing to Shanghai"
 
 # Combine with remote debugging capabilities
-python main.py --use-ollama --connect 192.168.1.100:5555 "Open TikTok and browse for 5 minutes"
+python main.py --use-ollama --connect 192.168.1.100:5555 --device-type adb "Open TikTok and browse for 5 minutes"
 ```
 
 ### Understanding Ollama-Specific Behavior
@@ -297,6 +312,7 @@ When using the `--use-ollama` flag, OpenAutoGLM will:
 3. **Apply Ollama-specific system prompts** optimized for Qwen's response format
 4. **Validate Ollama connectivity** before starting operations
 5. **Handle Qwen-specific response parsing** to ensure proper action execution
+6. **Support different device types** (Android ADB, iOS, HarmonyOS HDC) when combined with `--device-type`
 
 ### Performance Considerations with Ollama
 
@@ -331,13 +347,16 @@ When using the `--use-ollama` flag, OpenAutoGLM will:
 
 ```bash
 # Traditional vLLM approach (requires model deployment)
-python main.py --base-url http://localhost:8000/v1 --model autoglm-phone-9b-multilingual "Open Chrome"
+python main.py --base-url http://localhost:8000/v1 --model autoglm-phone-9b-multilingual --device-type adb "Open Chrome"
 
 # Third-party API approach (requires API key)
-python main.py --base-url https://api.z.ai/api/paas/v4 --model autoglm-phone-multilingual --apikey YOUR_KEY "Open Chrome"
+python main.py --base-url https://api.z.ai/api/paas/v4 --model autoglm-phone-multilingual --apikey YOUR_KEY --device-type adb "Open Chrome"
 
 # NEW: Ollama local approach (completely offline)
-python main.py --use-ollama "Open Chrome"
+python main.py --use-ollama --device-type adb "Open Chrome"
+
+# NEW: Ollama with iOS device
+python main.py --use-ollama --device-type ios "Open Safari"
 ```
 
 The Ollama integration provides a middle ground between fully local deployment (which requires significant setup) and API-based services (which require internet and may have costs). It offers:
@@ -345,6 +364,7 @@ The Ollama integration provides a middle ground between fully local deployment (
 - Reduced setup complexity compared to vLLM
 - Lower cost (no API fees)
 - Reasonable performance on consumer hardware
+- Support for multiple device types (Android, iOS, HarmonyOS)
 
 ## Using AutoGLM
 
